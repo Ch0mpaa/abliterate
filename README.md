@@ -25,17 +25,26 @@ different precision mixes, and different tensors that should or shouldn't be tou
 
 ```
 abliterate/
+├── scripts/                         # Universal format scripts
+│   ├── abliterate_bf16.py           # BF16/FP16/FP32 safetensors (baseline)
+│   ├── abliterate_gguf.py           # GGUF → dequant → abliterate → FP16
+│   ├── abliterate_gptq_awq.py      # GPTQ/AWQ — skip quantized, hit BF16
+│   ├── abliterate_exl3.py           # Abliterate BF16 → quantize to EXL3
+│   ├── abliterate_mlx.py            # MLX dequant → abliterate → requant
+│   └── validate_abliteration.py     # 6-test offsec validation suite
 ├── models/
-│   ├── qwen38-flash-next-nvfp4/    # Qwen3.8-Flash-Next 125B — NVIDIA NVFP4
+│   ├── qwen38-flash-next-nvfp4/     # Qwen3.8-Flash-Next 125B — NVIDIA NVFP4
 │   │   └── abliterate.py
-│   ├── qwen38-flash-next-int4/     # Qwen3.8-Flash-Next 125B — INT4-AutoRound
+│   ├── qwen38-flash-next-int4/      # Qwen3.8-Flash-Next 125B — INT4-AutoRound
 │   │   └── abliterate.py
-│   └── <model-name>/               # Future: add your model here
+│   ├── qwen25-0.5b-instruct/        # Practice model — Qwen2.5-0.5B BF16
+│   │   └── README.md
+│   └── <model-name>/                # Add your model here
 │       ├── abliterate.py
 │       └── README.md
 ├── monitor/
-│   ├── beacon-watch.sh             # Network-level exfil monitor
-│   └── post-beacon-scan.sh         # OMP hook for output scanning
+│   ├── beacon-watch.sh              # Network-level exfil monitor
+│   └── post-beacon-scan.sh          # OMP hook for output scanning
 └── README.md
 ```
 
@@ -63,12 +72,49 @@ because of how weights are stored and which layers can be safely modified.
   practical. Use `llama-quantize` to convert back. We'll provide scripts that handle the round-trip.
 - **MLX 4-bit:** Similar to GGUF — dequantize, abliterate, re-quantize. Use `mlx-lm` conversion tools.
 
+## Universal scripts
+
+The `scripts/` directory has format-specific abliteration scripts that work on **any model** in that format.
+They auto-detect architecture, compute a refusal direction via SVD if no pre-computed one is provided,
+and handle the dtype round-trips correctly.
+
+| Script | Format | Strategy | Extra deps |
+| :--- | :--- | :--- | :--- |
+| [`abliterate_bf16.py`](scripts/abliterate_bf16.py) | BF16/FP16/FP32 safetensors | Direct — modify all weight matrices | `torch`, `safetensors` |
+| [`abliterate_gptq_awq.py`](scripts/abliterate_gptq_awq.py) | GPTQ / AWQ | Skip `.qweight`/`.qzeros`/`.scales`, hit BF16 layers | `torch`, `safetensors` |
+| [`abliterate_gguf.py`](scripts/abliterate_gguf.py) | GGUF (Q4_K_M, Q5_K, etc.) | Dequantize all → abliterate → write FP16 safetensors | `gguf`, `torch` |
+| [`abliterate_exl3.py`](scripts/abliterate_exl3.py) | EXL3 (ExLlamaV3) | Abliterate BF16 source → quantize to EXL3 | `exllamav3` (optional) |
+| [`abliterate_mlx.py`](scripts/abliterate_mlx.py) | MLX 4-bit | Dequant → abliterate → requant via `mlx_lm` | `mlx`, `mlx-lm` |
+| [`validate_abliteration.py`](scripts/validate_abliteration.py) | Any (loads with transformers) | 6 offsec prompts, refusal detection, keyword validation | `transformers` |
+
+### Quick start with universal scripts
+
+```bash
+# BF16 — simplest, works on any safetensors model
+python3 scripts/abliterate_bf16.py --model ./stock-model --output ./abliterated --lambda 3.0
+
+# GPTQ/AWQ — same command, different script
+python3 scripts/abliterate_gptq_awq.py --model ./gptq-model --output ./abliterated --lambda 3.0
+
+# GGUF — outputs FP16 safetensors, re-quantize with llama-quantize
+python3 scripts/abliterate_gguf.py --model model.gguf --output ./abliterated --lambda 3.0
+llama-quantize ./abliterated/model.safetensors output-Q4_K_M.gguf Q4_K_M
+
+# Validate
+python3 scripts/validate_abliteration.py --model ./abliterated --compare ./stock-model
+```
+
+All scripts support `--direction path/to/direction.npz` to use a pre-computed refusal direction
+instead of the SVD fallback. Pre-computed directions are more targeted but require contrasting pair
+measurement on the base model.
+
 ## Supported models
 
 | Model | Format | Script | Published weights | Status |
 | :--- | :--- | :--- | :--- | :---: |
 | Qwen3.8-Flash-Next 125B | NVFP4 (CSF) | [`models/qwen38-flash-next-nvfp4/`](models/qwen38-flash-next-nvfp4/) | [Chompa1422/Qwen3.8-Flash-Next-NVFP4-Abliterated](https://huggingface.co/Chompa1422/Qwen3.8-Flash-Next-NVFP4-Abliterated) | ✅ Live |
 | Qwen3.8-Flash-Next 125B | INT4-AutoRound (GPTQ) | [`models/qwen38-flash-next-int4/`](models/qwen38-flash-next-int4/) | — | ✅ Tested |
+| Qwen2.5-0.5B-Instruct | BF16 (practice) | [`models/qwen25-0.5b-instruct/`](models/qwen25-0.5b-instruct/) | — | ✅ Validated |
 | *Your model here* | *Any format above* | `models/<name>/` | — | PRs welcome |
 
 ## How each script works
@@ -92,11 +138,14 @@ Every model script follows the same pattern:
 | **Hidden dim** | 2560 (Qwen3.8), 4096 (Llama-3), 2304 (Gemma-2-2B), etc. |
 | **FP8 support** | Some models have FP8 layers (Qwen3.8 NVFP4), most don't |
 
-### Why not one universal script?
+### Universal vs model-specific scripts
 
-We tried. The layer naming, quantization format, and skip-pattern differences make a single script either fragile
-(breaks on edge cases) or imprecise (modifies tensors it shouldn't). Model-specific scripts are shorter, auditable,
-and correct. The shared math is obvious enough to copy.
+The `scripts/` directory has **format-universal** scripts — one per quantization format. They auto-detect
+architecture, compute refusal directions via SVD, and handle any model in that format. Use these for new models.
+
+The `models/` directory has **model-specific** scripts — hand-tuned for a particular checkpoint with known tensor
+layouts, skip patterns, and pre-computed directions. These are more precise for production abliteration of large models
+where you want exact control over which tensors get modified.
 
 ## Adding a new model
 
@@ -131,11 +180,20 @@ a pure inference server.
 
 ## Requirements
 
+**Core** (all formats):
 - Python 3.10+
-- `torch`, `numpy`, `safetensors` (pip install)
-- A refusal direction vector for your target model
-- Enough RAM to hold one safetensor shard (~4–8 GB typical)
+- `torch`, `numpy`, `safetensors`
 - No GPU required — abliteration runs on CPU
+- Enough RAM to hold one safetensor shard (~4-8 GB typical)
+- Refusal direction auto-computed via SVD if not provided
+
+**Format-specific:**
+- GGUF: `pip install gguf` + `llama-quantize` for re-quantization
+- EXL3: `pip install exllamav3` for quantization step
+- MLX: `pip install mlx mlx-lm` (Apple Silicon for inference)
+- GPTQ/AWQ: no extra deps beyond core
+
+**Validation:** `pip install transformers accelerate`
 
 ## Credits
 
