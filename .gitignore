@@ -1,0 +1,8 @@
+*.pyc
+__pycache__/
+*.safetensors
+*.bin
+*.pt
+*.npz
+models/*/output/
+.env
