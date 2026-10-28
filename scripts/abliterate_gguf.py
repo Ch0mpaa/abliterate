@@ -142,8 +142,19 @@ def abliterate_gguf(model_path: str, output_dir: str, direction_path: str, lambd
     # Load/compute direction
     if direction_path and Path(direction_path).exists():
         data = np.load(direction_path)
-        directions = data["directions"].astype(np.float32)
+        if "v" in data:
+            v = data["v"].astype(np.float32)
+            layer = int(data["layer"]) if "layer" in data else -1
+            d = float(data["cohen_d"]) if "cohen_d" in data else 0
+            print(f"  Contrasting-pair direction: {v.shape[0]} dims, layer={layer}, Cohen's d={d:.2f}")
+            directions = np.tile(v, (num_layers, 1))
+        elif "directions" in data:
+            directions = data["directions"].astype(np.float32)
+        else:
+            directions = compute_refusal_direction_svd(reader, hidden_dim, num_layers)
     else:
+        print("No pre-computed direction found, computing via SVD (WARNING: imprecise for small models)...")
+        print("  For better results, use compute_direction.py to generate a contrasting-pair direction first.")
         directions = compute_refusal_direction_svd(reader, hidden_dim, num_layers)
 
     print(f"\nDequantizing and abliterating...")

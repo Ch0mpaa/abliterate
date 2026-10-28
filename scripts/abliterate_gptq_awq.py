@@ -97,8 +97,16 @@ def compute_refusal_direction_svd(model_dir: str, hidden_dim: int, num_layers: i
 def load_refusal_direction(direction_path, model_dir, hidden_dim, num_layers):
     if direction_path and Path(direction_path).exists():
         data = np.load(direction_path)
+        if "v" in data:
+            v = data["v"].astype(np.float32)
+            layer = int(data["layer"]) if "layer" in data else -1
+            d = float(data["cohen_d"]) if "cohen_d" in data else 0
+            print(f"  Contrasting-pair direction: {v.shape[0]} dims, layer={layer}, Cohen's d={d:.2f}")
+            return np.tile(v, (num_layers, 1))
         if "directions" in data:
             return data["directions"].astype(np.float32)
+    print("No pre-computed direction found, computing via SVD (WARNING: imprecise for small models)...")
+    print("  For better results, use compute_direction.py to generate a contrasting-pair direction first.")
     return compute_refusal_direction_svd(model_dir, hidden_dim, num_layers)
 
 

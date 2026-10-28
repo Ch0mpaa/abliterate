@@ -86,27 +86,49 @@ and handle the dtype round-trips correctly.
 | [`abliterate_exl3.py`](scripts/abliterate_exl3.py) | EXL3 (ExLlamaV3) | Abliterate BF16 source → quantize to EXL3 | `exllamav3` (optional) |
 | [`abliterate_mlx.py`](scripts/abliterate_mlx.py) | MLX 4-bit | Dequant → abliterate → requant via `mlx_lm` | `mlx`, `mlx-lm` |
 | [`validate_abliteration.py`](scripts/validate_abliteration.py) | Any (loads with transformers) | 6 offsec prompts, refusal detection, keyword validation | `transformers` |
+| [`compute_direction.py`](scripts/compute_direction.py) | Any (loads with transformers) | Contrasting-pair refusal direction computation | `torch`, `transformers`, `datasets` |
 
 ### Quick start with universal scripts
 
 ```bash
-# BF16 — simplest, works on any safetensors model
-python3 scripts/abliterate_bf16.py --model ./stock-model --output ./abliterated --lambda 3.0
+# Step 1: Compute the refusal direction (RECOMMENDED — much better than SVD fallback)
+python3 scripts/compute_direction.py --model ./stock-model --output direction.npz --n-prompts 128
 
-# GPTQ/AWQ — same command, different script
-python3 scripts/abliterate_gptq_awq.py --model ./gptq-model --output ./abliterated --lambda 3.0
+# Step 2: Abliterate with the computed direction
+python3 scripts/abliterate_bf16.py --model ./stock-model --output ./abliterated \
+  --direction direction.npz --lambda 3.0
 
-# GGUF — outputs FP16 safetensors, re-quantize with llama-quantize
-python3 scripts/abliterate_gguf.py --model model.gguf --output ./abliterated --lambda 3.0
+# Or for other formats:
+python3 scripts/abliterate_gptq_awq.py --model ./gptq-model --output ./abliterated \
+  --direction direction.npz --lambda 3.0
+
+python3 scripts/abliterate_gguf.py --model model.gguf --output ./abliterated \
+  --direction direction.npz --lambda 3.0
 llama-quantize ./abliterated/model.safetensors output-Q4_K_M.gguf Q4_K_M
 
-# Validate
+# Step 3: Validate
 python3 scripts/validate_abliteration.py --model ./abliterated --compare ./stock-model
 ```
 
 All scripts support `--direction path/to/direction.npz` to use a pre-computed refusal direction
-instead of the SVD fallback. Pre-computed directions are more targeted but require contrasting pair
-measurement on the base model.
+instead of the SVD fallback. **Always use `compute_direction.py` first** — the SVD fallback
+produces noisy directions that fail on small models and work poorly on medium ones.
+
+### SVD vs contrasting-pair directions
+
+The SVD fallback (used when no `--direction` is provided) extracts the top singular vector from
+attention output weights. This captures the dominant **weight structure** — general language capability —
+not the refusal direction. On small models (1.5B), inter-layer cosine similarity is ~0.001 (random noise).
+
+`compute_direction.py` runs harmful and harmless prompts through the model, records residual stream
+activations, and computes the mean difference. This finds the actual behavioral refusal direction.
+Cohen's d values above 4.0 are typical, meaning the harmful/harmless distributions are separated by
+4+ standard deviations — an unmistakable signal.
+
+| Method | 1.5B Cohen's d | 125B Cohen's d | 1.5B Result | 125B Result |
+| :--- | :--- | :--- | :--- | :--- |
+| SVD (weight-based) | N/A (0.001 coherence) | N/A | 0/6 useful | Not tested |
+| Contrasting pairs | 4.36 | 10.57 | Testing... | **6/6** |
 
 ## Supported models
 
