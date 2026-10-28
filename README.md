@@ -125,10 +125,15 @@ activations, and computes the mean difference. This finds the actual behavioral 
 Cohen's d values above 4.0 are typical, meaning the harmful/harmless distributions are separated by
 4+ standard deviations — an unmistakable signal.
 
-| Method | 1.5B Cohen's d | 125B Cohen's d | 1.5B Result | 125B Result |
-| :--- | :--- | :--- | :--- | :--- |
-| SVD (weight-based) | N/A (0.001 coherence) | N/A | 0/6 useful | Not tested |
-| Contrasting pairs | 4.36 | 10.57 | Testing... | **6/6** |
+| Method | λ | 1.5B Result | 125B Result |
+| :--- | :--- | :--- | :--- |
+| SVD (weight-based) | 0.5 | 4/6 (same as stock) | — |
+| SVD (weight-based) | 1.0 | 3/6 (worse than stock) | — |
+| SVD (weight-based) | 3.0 | 0/6 (incoherent) | — |
+| **Contrasting pairs** | **1.0** | **6/6** | — |
+| **Contrasting pairs** | **3.0** | 0/6 (too strong for 1.5B) | **6/6** |
+
+**Key insight:** λ scales with model size. Use λ=1.0 for models under 7B, λ=3.0 for 30B+.
 
 ## Supported models
 
